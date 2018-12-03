@@ -3,26 +3,31 @@ package auth
 import (
 	"encoding/json"
 	"errors"
+	"math"
+	"time"
 
 	"github.com/boltdb/bolt"
 	"github.com/ubclaunchpad/inertia/daemon/inertiad/crypto"
 )
 
 var (
-	errSessionNotFound = errors.New("Session not found")
-	errUserNotFound    = errors.New("User not found")
+	errSessionNotFound      = errors.New("Session not found")
+	errUserNotFound         = errors.New("User not found")
+	errTooManyLoginAttempts = errors.New("Too many login attempts")
 )
 
 const (
 	loginAttemptsLimit = 5
+	loginBackoffBase   = 60
 )
 
 // userProps are properties associated with user, used
 // for database entries
 type userProps struct {
-	HashedPassword string
-	Admin          bool
-	LoginAttempts  int
+	HashedPassword   string
+	Admin            bool
+	LoginAttempts    int
+	NextAllowedLogin int64
 }
 
 // userManager administers sessions and user accounts
@@ -149,7 +154,6 @@ func (m *userManager) IsCorrectCredentials(username, password string) (*userProp
 	var (
 		userbytes = []byte(username)
 		userProps = &userProps{}
-		userErr   error
 		correct   bool
 	)
 
@@ -168,33 +172,30 @@ func (m *userManager) IsCorrectCredentials(username, password string) (*userProp
 			return errors.New("Corrupt user properties: " + err.Error())
 		}
 
-		// Delete user since LoginAttempts must be updated
-		err = users.Delete(userbytes)
-		if err != nil {
-			return err
+		currentTime := time.Now().Unix()
+
+		if userProps.NextAllowedLogin > currentTime {
+			return errTooManyLoginAttempts
 		}
 
 		correct = crypto.CorrectPassword(userProps.HashedPassword, password)
 		if !correct {
-			// Track number of login attempts and don't add
-			// user back to the database if past limit
 			userProps.LoginAttempts++
-			if userProps.LoginAttempts <= loginAttemptsLimit {
-				bytes, err := json.Marshal(userProps)
-				if err != nil {
-					return err
-				}
-				return users.Put(userbytes, bytes)
+			if userProps.LoginAttempts >= loginAttemptsLimit {
+				backoffTime := loginBackoffBase * math.Pow(2, (float64)(userProps.LoginAttempts-loginAttemptsLimit))
+				userProps.NextAllowedLogin = currentTime + (int64)(backoffTime)
 			}
 
-			// Rollback will occur if transaction returns and error, so store
-			// in variable. TODO: don't delete?
-			userErr = errors.New("Too many login attempts - user deleted")
-			return nil
+			bytes, err := json.Marshal(userProps)
+			if err != nil {
+				return err
+			}
+			return users.Put(userbytes, bytes)
 		}
 
 		// Reset attempts to 0 if login successful
 		userProps.LoginAttempts = 0
+		userProps.NextAllowedLogin = 0
 		bytes, err := json.Marshal(userProps)
 		if err != nil {
 			return err
@@ -202,9 +203,6 @@ func (m *userManager) IsCorrectCredentials(username, password string) (*userProp
 		return users.Put(userbytes, bytes)
 	})
 
-	if userErr != nil {
-		return userProps, correct, userErr
-	}
 	return userProps, correct, transactionErr
 }
 

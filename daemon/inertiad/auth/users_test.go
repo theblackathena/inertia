@@ -1,11 +1,10 @@
 package auth
 
 import (
+	"github.com/stretchr/testify/assert"
 	"os"
 	"path"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
 func getTestUserManager(dir string) (*userManager, error) {
@@ -120,9 +119,5 @@ func TestTooManyLogins(t *testing.T) {
 	_, correct, err := manager.IsCorrectCredentials("bobheadxi", "not_quite_best")
 	assert.False(t, correct)
 	assert.NotNil(t, err)
-	assert.Contains(t, err.Error(), "login attempts")
-
-	err = manager.HasUser("bobheadxi")
-	assert.NotNil(t, err)
-	assert.Equal(t, errUserNotFound, err)
+	assert.Equal(t, errTooManyLoginAttempts, err)
 }

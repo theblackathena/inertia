@@ -290,6 +290,10 @@ func (h *PermissionsHandler) loginHandler(w http.ResponseWriter, r *http.Request
 
 	// Log in user if password is correct
 	props, correct, err := h.users.IsCorrectCredentials(userReq.Username, userReq.Password)
+	if err == errTooManyLoginAttempts {
+		http.Error(w, err.Error(), http.StatusTooManyRequests)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
